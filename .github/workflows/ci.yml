@@ -1,0 +1,35 @@
+name: CI
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+
+jobs:
+    verify:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+            - run: npm ci
+            - run: npm run format:check
+            - run: npm run lint
+            - run: npm run typecheck
+            - run: npm test
+            - run: npx playwright install --with-deps chromium webkit
+            - run: npm run test:browser
+            - run: npm run build
+            - run: npm run size
+            - run: npm run check-exports
+            - run: npm run pack:verify
+            - name: Assert zero runtime dependencies (it is a marketing claim)
+              run: |
+                  node -e "
+                  const pkg = require('./package.json');
+                  if (pkg.dependencies || pkg.peerDependencies) {
+                    console.error('dependencies/peerDependencies must stay empty');
+                    process.exit(1);
+                  }"

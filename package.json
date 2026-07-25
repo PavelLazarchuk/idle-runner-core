@@ -1,0 +1,89 @@
+{
+    "name": "@idle-runner/core",
+    "version": "1.0.0",
+    "description": "Defer and time-slice non-urgent work on the main thread. Zero dependencies, Safari-safe.",
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.cjs",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.cts",
+    "exports": {
+        ".": {
+            "import": {
+                "types": "./dist/index.d.ts",
+                "default": "./dist/index.js"
+            },
+            "require": {
+                "types": "./dist/index.d.cts",
+                "default": "./dist/index.cjs"
+            }
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist"
+    ],
+    "publishConfig": {
+        "access": "public",
+        "provenance": true
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/PavelLazarchuk/idle-runner-core.git"
+    },
+    "bugs": "https://github.com/PavelLazarchuk/idle-runner-core/issues",
+    "homepage": "https://github.com/PavelLazarchuk/idle-runner-core#readme",
+    "keywords": [
+        "idle",
+        "requestIdleCallback",
+        "scheduler",
+        "INP",
+        "core-web-vitals",
+        "main-thread",
+        "task-queue",
+        "performance",
+        "generator",
+        "typescript"
+    ],
+    "author": "Pavel Lazarchuk",
+    "license": "MIT",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "build": "tsup",
+        "dev": "tsup --watch",
+        "typecheck": "tsc --noEmit",
+        "lint": "eslint .",
+        "format": "prettier --write .",
+        "format:check": "prettier --check .",
+        "test": "vitest run --project unit",
+        "test:watch": "vitest --project unit",
+        "test:browser": "vitest run --project browser",
+        "size": "size-limit",
+        "check-exports": "publint && attw --pack .",
+        "pack:verify": "node scripts/verify-tarball.mjs",
+        "changeset": "changeset",
+        "release": "npm run build && node scripts/publish-if-new.mjs",
+        "prepare": "husky"
+    },
+    "devDependencies": {
+        "@arethetypeswrong/cli": "^0.18.5",
+        "@changesets/cli": "^2.31.1",
+        "@size-limit/preset-small-lib": "^12.1.0",
+        "@types/node": "^26.1.1",
+        "@vitest/browser": "^4.1.10",
+        "@vitest/browser-playwright": "^4.1.10",
+        "eslint": "^10.7.0",
+        "husky": "^9.1.7",
+        "lint-staged": "^17.0.8",
+        "playwright": "^1.61.1",
+        "prettier": "^3.9.5",
+        "publint": "^0.3.21",
+        "size-limit": "^12.1.0",
+        "tsup": "^8.5.1",
+        "typescript": "^6.0.3",
+        "typescript-eslint": "^8.64.0",
+        "vitest": "^4.1.10"
+    }
+}
