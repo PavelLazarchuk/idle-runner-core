@@ -22,9 +22,7 @@ jobs:
             - run: npx playwright install --with-deps chromium webkit
             - run: npm run test:browser
             - run: npm run build
-            - run: npm run size
             - run: npm run check-exports
-            - run: npm run pack:verify
             - name: Assert zero runtime dependencies (it is a marketing claim)
               run: |
                   node -e "

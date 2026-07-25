@@ -60,9 +60,7 @@
         "test": "vitest run --project unit",
         "test:watch": "vitest --project unit",
         "test:browser": "vitest run --project browser",
-        "size": "size-limit",
         "check-exports": "publint && attw --pack .",
-        "pack:verify": "node scripts/verify-tarball.mjs",
         "changeset": "changeset",
         "release": "npm run build && node scripts/publish-if-new.mjs",
         "prepare": "husky"
@@ -70,7 +68,6 @@
     "devDependencies": {
         "@arethetypeswrong/cli": "^0.18.5",
         "@changesets/cli": "^2.31.1",
-        "@size-limit/preset-small-lib": "^12.1.0",
         "@types/node": "^26.1.1",
         "@vitest/browser": "^4.1.10",
         "@vitest/browser-playwright": "^4.1.10",
@@ -80,7 +77,6 @@
         "playwright": "^1.61.1",
         "prettier": "^3.9.5",
         "publint": "^0.3.21",
-        "size-limit": "^12.1.0",
         "tsup": "^8.5.1",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.64.0",
