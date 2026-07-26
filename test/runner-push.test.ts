@@ -125,7 +125,7 @@ describe('push — timeout / forced drain', () => {
         const { fake, runner } = makeRunner();
         const spy = vi.fn(() => 'forced');
         const promise = runner.push(spy, { timeout: 50 });
-        vi.setSystemTime(50);
+        vi.advanceTimersByTime(50);
         fake.fireTimeout();
         expect(spy).toHaveBeenCalledOnce();
         await expect(promise).resolves.toBe('forced');
@@ -137,7 +137,7 @@ describe('push — timeout / forced drain', () => {
         const a = runner.push(() => ran.push('a'), { timeout: 50 });
         void runner.push(() => ran.push('b'), { timeout: 5000 });
         void runner.push(() => ran.push('c'));
-        vi.setSystemTime(60);
+        vi.advanceTimersByTime(60);
         fake.fireTimeout();
         await a;
         expect(ran).toEqual(['a']);
@@ -179,7 +179,7 @@ describe('push — timeout / forced drain', () => {
             return 'done';
         }
         const promise = runner.pushChunked(work(), { timeout: 50 });
-        vi.setSystemTime(50);
+        vi.advanceTimersByTime(50);
         fake.fireTimeout();
         expect(steps).toEqual([1, 2, 3]);
         await expect(promise).resolves.toBe('done');

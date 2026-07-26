@@ -1,5 +1,6 @@
 import type { Deadline, SchedulerAdapter } from '../core/types';
 import { hostGlobals, type HostGlobals } from './host';
+import { now } from './clock';
 
 export interface SchedulerAdapterOptions {
     budgetMs?: number;
@@ -26,10 +27,6 @@ export function detectRung(host: HostGlobals): RungName {
     if (typeof host.MessageChannel === 'function') return 'MessageChannel';
 
     return 'setTimeout';
-}
-
-function now(host: HostGlobals): number {
-    return host.performance ? host.performance.now() : Date.now();
 }
 
 const TIMED_OUT_DEADLINE: Deadline = { didTimeout: true, timeRemaining: () => 0 };

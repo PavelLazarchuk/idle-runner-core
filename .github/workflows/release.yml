@@ -1,10 +1,12 @@
 name: Release
 
 on:
-    push:
+    workflow_run:
+        workflows: [CI]
+        types: [completed]
         branches: [main]
 
-concurrency: release-${{ github.ref }}
+concurrency: release-${{ github.event.workflow_run.head_branch }}
 
 permissions:
     contents: write
@@ -13,10 +15,14 @@ permissions:
 
 jobs:
     release:
+        if: github.event.workflow_run.conclusion == 'success'
         runs-on: ubuntu-latest
         environment: NPM_TOKEN
         steps:
             - uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.event.workflow_run.head_sha }}
+                  fetch-depth: 0
 
             - uses: actions/setup-node@v4
               with:

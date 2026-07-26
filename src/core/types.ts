@@ -17,4 +17,5 @@ export interface IdleRunnerOptions {
     budgetMs?: number;
     scheduler?: SchedulerAdapter;
     flushOnHidden?: boolean;
+    onError?: (error: unknown) => void;
 }

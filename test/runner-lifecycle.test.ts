@@ -294,9 +294,9 @@ describe('review fixes regression', () => {
         const soon = runner.push(() => 'soon', { signal: controller.signal, timeout: 100 });
         soon.catch(() => {});
         void runner.push(() => 'later', { timeout: 5000 });
-        expect(fake.lastRequestTimeout).toBe(100);
+        expect(fake.lastRequestTimeout).toBeCloseTo(100, 0);
         controller.abort();
-        expect(fake.lastRequestTimeout).toBe(5000);
+        expect(fake.lastRequestTimeout).toBeCloseTo(5000, 0);
     });
 
     it('flush() re-entered during flush() is not dropped (both tasks run, none deferred to a later wake)', async () => {

@@ -2,8 +2,10 @@ import type { Deadline, IdleRunnerOptions, IdleTaskOptions, SchedulerAdapter } f
 import { createAbortError } from './abort-error';
 import { createSchedulerAdapter } from '../scheduler/adapter';
 import { bindHiddenFlush } from '../scheduler/lifecycle';
+import { hostNow } from '../scheduler/clock';
 
 const DEFAULT_BUDGET_MS = 5;
+const MIN_BUDGET_MS = 1;
 const MAX_BUDGET_MS = 49;
 
 // Internal members are _-prefixed so the build can mangle them (tsup
@@ -36,6 +38,7 @@ export class IdleRunner {
     private readonly _budgetMs: number;
     private readonly _scheduler: SchedulerAdapter;
     private readonly _unbindHidden: (() => void) | null;
+    private readonly _onError: ((error: unknown) => void) | null;
     private _queue: Task[] = [];
     private _current: Task | null = null;
     private _handle: number | null = null;
@@ -48,13 +51,19 @@ export class IdleRunner {
     constructor(options: IdleRunnerOptions = {}) {
         let budget = options.budgetMs ?? DEFAULT_BUDGET_MS;
 
-        if (budget > MAX_BUDGET_MS) {
+        if (!Number.isFinite(budget)) {
+            devWarn(`budgetMs must be a finite number; using ${DEFAULT_BUDGET_MS}`);
+            budget = DEFAULT_BUDGET_MS;
+        } else if (budget > MAX_BUDGET_MS) {
             devWarn(`budgetMs clamped to ${MAX_BUDGET_MS}`);
             budget = MAX_BUDGET_MS;
+        } else if (budget < MIN_BUDGET_MS) {
+            devWarn(`budgetMs clamped to ${MIN_BUDGET_MS}`);
+            budget = MIN_BUDGET_MS;
         }
-        if (budget < 1) budget = 1;
 
         this._budgetMs = budget;
+        this._onError = options.onError ?? null;
         this._scheduler = options.scheduler ?? createSchedulerAdapter({ budgetMs: budget });
         this._unbindHidden =
             options.flushOnHidden !== false ? bindHiddenFlush(() => this.flush()) : null;
@@ -67,7 +76,7 @@ export class IdleRunner {
     }
 
     push<T>(fn: () => T, options?: IdleTaskOptions): Promise<T> {
-        return this._enqueue<T>('fn', fn, null, options);
+        return this._guard(this._enqueue<T>('fn', fn, null, options));
     }
 
     pushChunked<T>(
@@ -80,10 +89,10 @@ export class IdleRunner {
             typeof candidate?.next !== 'function' ||
             typeof candidate?.[Symbol.iterator] !== 'function'
         ) {
-            return Promise.reject(new TypeError('needs a sync generator'));
+            return this._guard(Promise.reject(new TypeError('needs a sync generator')));
         }
 
-        return this._enqueue<T>('gen', null, generator, options);
+        return this._guard(this._enqueue<T>('gen', null, generator, options));
     }
 
     clear(reason?: unknown): void {
@@ -137,6 +146,22 @@ export class IdleRunner {
         return this._inSlice;
     }
 
+    private _guard<T>(promise: Promise<T>): Promise<T> {
+        if (this._onError) promise.catch(this._reportError);
+
+        return promise;
+    }
+
+    private readonly _reportError = (error: unknown): void => {
+        if ((error as { name?: unknown } | null)?.name === 'AbortError') return;
+
+        try {
+            this._onError!(error);
+        } catch {
+            devWarn('onError threw');
+        }
+    };
+
     private _enqueue<T>(
         kind: 'fn' | 'gen',
         run: (() => T) | null,
@@ -156,7 +181,7 @@ export class IdleRunner {
                 _gen: gen,
                 _resolve: resolve as (value: unknown) => void,
                 _reject: reject,
-                _deadlineAt: options?.timeout != null ? Date.now() + options.timeout : null,
+                _deadlineAt: options?.timeout != null ? hostNow() + options.timeout : null,
                 _signal: signal,
                 _onAbort: null,
                 _settled: false,
@@ -196,7 +221,7 @@ export class IdleRunner {
         this._armedDeadlineAt = min;
         this._handle = this._scheduler.request(
             this._onSlice,
-            min == null ? undefined : Math.max(0, min - Date.now())
+            min == null ? undefined : Math.max(0, min - hostNow())
         );
     }
 
@@ -284,7 +309,7 @@ export class IdleRunner {
     }
 
     private _forcedDrain(): void {
-        const nowMs = Date.now();
+        const nowMs = hostNow();
         this._drain(task => task._deadlineAt != null && task._deadlineAt <= nowMs);
     }
 
@@ -334,7 +359,7 @@ export class IdleRunner {
             return;
         }
 
-        const started = Date.now();
+        const started = hostNow();
 
         try {
             const result = task._gen!.next();
@@ -391,7 +416,7 @@ export class IdleRunner {
     private _closeGenerator(task: Task): void {
         const gen = task._gen;
 
-        if (!gen) return;
+        if (!gen || typeof gen.return !== 'function') return;
 
         try {
             gen.return(undefined);
@@ -428,7 +453,7 @@ export class IdleRunner {
     private _maybeWarnSlowStep(started: number): void {
         if (this._warnedSlowStep) return;
 
-        const elapsed = Date.now() - started;
+        const elapsed = hostNow() - started;
 
         if (elapsed > Math.max(50, this._budgetMs * 4)) {
             this._warnedSlowStep = true;
