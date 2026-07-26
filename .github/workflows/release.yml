@@ -17,7 +17,7 @@ jobs:
     release:
         if: github.event.workflow_run.conclusion == 'success'
         runs-on: ubuntu-latest
-        environment: NPM_TOKEN
+        environment: npm-publish
         steps:
             - uses: actions/checkout@v4
               with:
