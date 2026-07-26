@@ -1,6 +1,6 @@
 {
     "name": "@idle-runner/core",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Defer and time-slice non-urgent work on the main thread. Zero dependencies, Safari-safe.",
     "type": "module",
     "sideEffects": false,
