@@ -1,5 +1,11 @@
 # @idle-runner/core
 
+## 1.1.1
+
+### Patch Changes
+
+- ebb76ad: Improve npm/search discoverability: broaden `description`, add more `keywords` (including the full package name), and add npm badges to the README.
+
 ## 1.1.0
 
 ### Minor Changes
