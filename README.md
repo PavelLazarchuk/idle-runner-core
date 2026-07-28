@@ -1,5 +1,8 @@
 # @idle-runner/core
 
+[![npm version](https://img.shields.io/npm/v/@idle-runner/core.svg)](https://www.npmjs.com/package/@idle-runner/core)
+[![npm downloads](https://img.shields.io/npm/dm/@idle-runner/core.svg)](https://www.npmjs.com/package/@idle-runner/core)
+
 Run non-urgent work without blocking the main thread. ~2kb, zero dependencies, **works on Safari** — where `requestIdleCallback` has never shipped enabled and most "idle" libraries quietly stop being idle libraries.
 
 Tasks are deferred and **time-sliced**: the runner executes them in small budgeted slices (5ms by default) between the browser's latency-critical work, so input handling and rendering never wait behind your queue.
