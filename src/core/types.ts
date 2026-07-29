@@ -8,9 +8,13 @@ export interface SchedulerAdapter {
     cancel(handle: number): void;
 }
 
+export type TaskPriority = 'user-blocking' | 'user-visible' | 'background';
+
 export interface IdleTaskOptions {
     timeout?: number;
     signal?: AbortSignal;
+    priority?: TaskPriority;
+    key?: PropertyKey;
 }
 
 export interface IdleRunnerOptions {
@@ -18,4 +22,5 @@ export interface IdleRunnerOptions {
     scheduler?: SchedulerAdapter;
     flushOnHidden?: boolean;
     onError?: (error: unknown) => void;
+    agingMs?: number;
 }

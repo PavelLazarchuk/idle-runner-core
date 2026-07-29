@@ -1,4 +1,10 @@
-import type { Deadline, IdleRunnerOptions, IdleTaskOptions, SchedulerAdapter } from './types';
+import type {
+    Deadline,
+    IdleRunnerOptions,
+    IdleTaskOptions,
+    SchedulerAdapter,
+    TaskPriority,
+} from './types';
 import { createAbortError } from './abort-error';
 import { createSchedulerAdapter } from '../scheduler/adapter';
 import { bindHiddenFlush } from '../scheduler/lifecycle';
@@ -7,6 +13,15 @@ import { hostNow } from '../scheduler/clock';
 const DEFAULT_BUDGET_MS = 5;
 const MIN_BUDGET_MS = 1;
 const MAX_BUDGET_MS = 49;
+const DEFAULT_AGING_MS = 1000;
+
+const PRIORITY_RANKS: Record<string, number | undefined> = {
+    'user-blocking': 0,
+    'user-visible': 1,
+    background: 2,
+};
+const RANK_COUNT = 3;
+const DEFAULT_RANK = 1;
 
 // Internal members are _-prefixed so the build can mangle them (tsup
 // esbuildOptions mangleProps) — they are the bulk of the shipped bytes.
@@ -20,6 +35,10 @@ interface Task {
     _signal: AbortSignal | null;
     _onAbort: (() => void) | null;
     _settled: boolean;
+    _rank: number;
+    _seq: number;
+    _queuedAt: number;
+    _key: PropertyKey | null;
 }
 
 declare const process: { env?: { NODE_ENV?: string } } | undefined;
@@ -36,10 +55,13 @@ function devWarn(message: string): void {
 
 export class IdleRunner {
     private readonly _budgetMs: number;
+    private readonly _agingMs: number;
     private readonly _scheduler: SchedulerAdapter;
     private readonly _unbindHidden: (() => void) | null;
     private readonly _onError: ((error: unknown) => void) | null;
-    private _queue: Task[] = [];
+    private readonly _queues: Task[][] = [[], [], []];
+    private readonly _keyed = new Map<PropertyKey, Task>();
+    private _nextSeq = 1;
     private _current: Task | null = null;
     private _handle: number | null = null;
     private _armedDeadlineAt: number | null = null;
@@ -62,14 +84,21 @@ export class IdleRunner {
             budget = MIN_BUDGET_MS;
         }
 
+        let aging = options.agingMs ?? DEFAULT_AGING_MS;
+
+        if (Number.isNaN(aging) || aging < 0) {
+            devWarn(`agingMs must be >= 0; using ${DEFAULT_AGING_MS}`);
+            aging = DEFAULT_AGING_MS;
+        }
+
         this._budgetMs = budget;
+        this._agingMs = aging;
         this._onError = options.onError ?? null;
         this._scheduler = options.scheduler ?? createSchedulerAdapter({ budgetMs: budget });
         this._unbindHidden =
             options.flushOnHidden !== false ? bindHiddenFlush(() => this.flush()) : null;
     }
 
-    /** Unbind lifecycle listeners and reject pending tasks. Call when the runner is no longer needed. */
     destroy(): void {
         this._unbindHidden?.();
         this.clear();
@@ -106,12 +135,16 @@ export class IdleRunner {
             this._settle(task, false, error);
         }
 
-        for (const task of this._queue.splice(0)) {
-            if (task._settled) continue;
+        for (const bucket of this._queues) {
+            for (const task of bucket.splice(0)) {
+                if (task._settled) continue;
 
-            this._closeGenerator(task);
-            this._settle(task, false, error);
+                this._closeGenerator(task);
+                this._settle(task, false, error);
+            }
         }
+
+        this._keyed.clear();
     }
 
     pause(): void {
@@ -139,7 +172,11 @@ export class IdleRunner {
     }
 
     get size(): number {
-        return this._queue.length + (this._current ? 1 : 0);
+        let total = this._current ? 1 : 0;
+
+        for (const bucket of this._queues) total += bucket.length;
+
+        return total;
     }
 
     get isRunning(): boolean {
@@ -174,18 +211,28 @@ export class IdleRunner {
             return Promise.reject(createAbortError());
         }
 
+        const rank = this._rankOf(options?.priority);
+        const key = options?.key ?? null;
+
         return new Promise<T>((resolve, reject) => {
+            const queuedAt = hostNow();
             const task: Task = {
                 _kind: kind,
                 _run: run,
                 _gen: gen,
                 _resolve: resolve as (value: unknown) => void,
                 _reject: reject,
-                _deadlineAt: options?.timeout != null ? hostNow() + options.timeout : null,
+                _deadlineAt: options?.timeout != null ? queuedAt + options.timeout : null,
                 _signal: signal,
                 _onAbort: null,
                 _settled: false,
+                _rank: rank,
+                _seq: this._nextSeq++,
+                _queuedAt: queuedAt,
+                _key: key,
             };
+
+            if (key !== null) this._supersede(key, task);
 
             if (signal) {
                 const onAbort = () => this._abortTask(task);
@@ -193,9 +240,97 @@ export class IdleRunner {
                 signal.addEventListener('abort', onAbort, { once: true });
             }
 
-            this._queue.push(task);
+            this._queues[rank]!.push(task);
             this._arm(task._deadlineAt);
         });
+    }
+
+    private _rankOf(priority: TaskPriority | undefined): number {
+        if (priority === undefined) return DEFAULT_RANK;
+
+        const rank = PRIORITY_RANKS[priority];
+
+        if (rank === undefined) {
+            devWarn(`unknown priority "${String(priority)}"; using user-visible`);
+
+            return DEFAULT_RANK;
+        }
+
+        return rank;
+    }
+
+    private _supersede(key: PropertyKey, next: Task): void {
+        const previous = this._keyed.get(key);
+
+        if (previous && !previous._settled) {
+            this._removeTask(previous);
+            this._closeGenerator(previous);
+            this._settle(previous, false, createAbortError('Superseded'));
+        }
+
+        this._keyed.set(key, next);
+    }
+
+    private _releaseKey(task: Task): void {
+        if (task._key !== null && this._keyed.get(task._key) === task) {
+            this._keyed.delete(task._key);
+        }
+    }
+
+    private _removeTask(task: Task): void {
+        const bucket = this._queues[task._rank]!;
+        const index = bucket.indexOf(task);
+
+        if (index !== -1) bucket.splice(index, 1);
+    }
+
+    private _take(
+        maxSeq: number,
+        predicate: ((task: Task) => boolean) | null,
+        nowMs: number
+    ): Task | null {
+        let best: Task | null = null;
+        let bestIndex = -1;
+        let bestStarved = false;
+
+        for (let rank = 0; rank < RANK_COUNT; rank++) {
+            const bucket = this._queues[rank]!;
+            let candidate: Task | null = null;
+            let candidateIndex = -1;
+
+            for (let i = 0; i < bucket.length; i++) {
+                const task = bucket[i]!;
+
+                if (task._seq > maxSeq) break;
+                if (task._settled) continue;
+                if (predicate && !predicate(task)) continue;
+
+                candidate = task;
+                candidateIndex = i;
+                break;
+            }
+
+            if (!candidate) continue;
+
+            const starved = nowMs - candidate._queuedAt >= this._agingMs;
+
+            if (
+                !best ||
+                (starved && !bestStarved) ||
+                (starved && bestStarved && candidate._queuedAt < best._queuedAt)
+            ) {
+                best = candidate;
+                bestIndex = candidateIndex;
+                bestStarved = starved;
+            }
+        }
+
+        if (!best) return null;
+
+        this._queues[best._rank]!.splice(bestIndex, 1);
+        this._releaseKey(best);
+
+        return best;
     }
 
     /**
@@ -237,9 +372,11 @@ export class IdleRunner {
     private _minDeadlineAt(): number | null {
         let min = this._current?._deadlineAt ?? null;
 
-        for (const task of this._queue) {
-            if (task._deadlineAt != null && (min == null || task._deadlineAt < min)) {
-                min = task._deadlineAt;
+        for (const bucket of this._queues) {
+            for (const task of bucket) {
+                if (task._deadlineAt != null && (min == null || task._deadlineAt < min)) {
+                    min = task._deadlineAt;
+                }
             }
         }
 
@@ -278,27 +415,21 @@ export class IdleRunner {
     /**
      * Budgeted drain: the budget is checked BEFORE starting each task, not after —
      * starting a 40ms task with 0.3ms left is how an "INP library" creates long
-     * tasks. The queue length is snapshotted so tasks pushed from inside a running
+     * tasks. The sequence is snapshotted so tasks pushed from inside a running
      * task land in the next slice, never this one.
      */
     private _budgetedDrain(deadline: Deadline): void {
-        const initialLength = this._queue.length;
-        let taken = 0;
+        const maxSeq = this._nextSeq - 1;
 
         while (!this._paused && deadline.timeRemaining() > this._budgetMs) {
-            if (this._current) {
+            if (this._current && !this._preempt(maxSeq)) {
                 this._stepCurrent();
                 continue;
             }
-            if (taken >= initialLength) break;
 
-            const task = this._queue.shift();
+            const task = this._take(maxSeq, null, hostNow());
 
             if (!task) break;
-
-            taken++;
-
-            if (task._settled) continue;
             if (task._kind === 'gen') {
                 this._current = task;
                 continue;
@@ -306,6 +437,24 @@ export class IdleRunner {
 
             this._executeFn(task);
         }
+    }
+
+    private _preempt(maxSeq: number): boolean {
+        const current = this._current!;
+
+        for (let rank = 0; rank < current._rank; rank++) {
+            for (const task of this._queues[rank]!) {
+                if (task._seq > maxSeq) break;
+                if (task._settled) continue;
+
+                this._current = null;
+                this._queues[current._rank]!.unshift(current);
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private _forcedDrain(): void {
@@ -325,21 +474,23 @@ export class IdleRunner {
     }
 
     private _drain(predicate: ((task: Task) => boolean) | null): void {
+        const maxSeq = this._nextSeq - 1;
+        const nowMs = hostNow();
+
         if (this._current && (!predicate || predicate(this._current))) {
             const task = this._current;
             this._current = null;
             this._runToCompletion(task);
         }
 
-        const remaining: Task[] = [];
+        for (;;) {
+            const task = this._take(maxSeq, predicate, nowMs);
 
-        for (const task of this._queue.splice(0)) {
+            if (!task) break;
             if (task._settled) continue;
-            if (!predicate || predicate(task)) this._runToCompletion(task);
-            else remaining.push(task);
-        }
 
-        this._queue = remaining.concat(this._queue);
+            this._runToCompletion(task);
+        }
     }
 
     private _executeFn(task: Task): void {
@@ -403,9 +554,7 @@ export class IdleRunner {
         if (this._current === task) {
             this._current = null;
         } else {
-            const index = this._queue.indexOf(task);
-
-            if (index !== -1) this._queue.splice(index, 1);
+            this._removeTask(task);
         }
         this._closeGenerator(task);
         this._settle(task, false, createAbortError());
@@ -441,6 +590,7 @@ export class IdleRunner {
             task._signal.removeEventListener('abort', task._onAbort);
         }
 
+        this._releaseKey(task);
         task._resolve = null;
         task._reject = null;
         task._run = null;

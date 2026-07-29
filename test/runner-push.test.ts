@@ -88,8 +88,8 @@ describe('push — budgeted drain', () => {
     it('nulls task internals after settling (no closure retention)', async () => {
         const { fake, runner } = makeRunner();
         const promise = runner.push(() => 'x');
-        const internal = (runner as unknown as { _queue: Array<Record<string, unknown>> })
-            ._queue[0]!;
+        const internal = (runner as unknown as { _queues: Array<Array<Record<string, unknown>>> })
+            ._queues[1]![0]!;
         fake.fireSlice(100);
         await promise;
         expect(internal._resolve).toBeNull();

@@ -394,7 +394,8 @@ describe('memory', () => {
         for (let i = 0; i < 100_000; i++) {
             promises.push(runner.push(() => i));
         }
-        const queue = (runner as unknown as { _queue: Array<Record<string, unknown>> })._queue;
+        const queue = (runner as unknown as { _queues: Array<Array<Record<string, unknown>>> })
+            ._queues[1]!;
         const first = queue[0]!;
         const last = queue[queue.length - 1]!;
         runner.flush();

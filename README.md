@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@idle-runner/core.svg)](https://www.npmjs.com/package/@idle-runner/core)
 [![npm downloads](https://img.shields.io/npm/dm/@idle-runner/core.svg)](https://www.npmjs.com/package/@idle-runner/core)
 
-Run non-urgent work without blocking the main thread. ~2kb, zero dependencies, **works on Safari** — where `requestIdleCallback` has never shipped enabled and most "idle" libraries quietly stop being idle libraries.
+Run non-urgent work without blocking the main thread. ~3kb, zero dependencies, **works on Safari** — where `requestIdleCallback` has never shipped enabled and most "idle" libraries quietly stop being idle libraries.
 
 Tasks are deferred and **time-sliced**: the runner executes them in small budgeted slices (5ms by default) between the browser's latency-critical work, so input handling and rendering never wait behind your queue.
 
@@ -89,6 +89,32 @@ useEffect(() => {
     return () => runner.destroy(); // unbinds listeners, rejects pending tasks
 }, [target]);
 ```
+
+## Priority
+
+Every task defaults to `'user-visible'` — the existing FIFO behavior, unchanged if you never pass `priority`. Pass it to move a task to a different one of three buckets, drained highest-first:
+
+```ts
+runner.push(() => flushAnalytics(events), { priority: 'background' });
+runner.push(() => renderVisibleTiles(), { priority: 'user-visible' }); // default
+runner.push(() => finishInteractionWork(), { priority: 'user-blocking' });
+```
+
+Within a bucket, order is still FIFO. A steady stream of `user-visible` work can't starve `background` forever, though: a task that has waited longer than `agingMs` (default 1000ms) outranks everything ahead of it, oldest-starved-first. Set `agingMs: Infinity` for strict priority with no aging.
+
+Priority is cooperative, not preemptive at the statement level — a running function always finishes. A **suspended generator** from `pushChunked` is the exception: at its next `yield`, higher-priority work queued in the meantime runs first, and the generator resumes afterward from the same point. Equal-or-lower priority never interrupts it.
+
+## Deduplicating by key
+
+Pass `key` to make a new push supersede a pending one with the same key — the stale task rejects with `AbortError` (silently, if `onError` is set) and never runs. This is the one-liner for "recompute on every keystroke, only the latest result matters":
+
+```ts
+function onQuery(query: string) {
+    return runner.push(() => search(query), { key: 'search' });
+}
+```
+
+Only _pending_ work is superseded — a task already running (including a suspended chunked generator mid-`yield`) keeps going; cancel that one yourself with `signal` if you need to. `key` and `priority` compose freely: the newest push keeps whichever priority it was given, independent of the one it replaced.
 
 ## Errors
 
@@ -178,6 +204,7 @@ The page-wide runner with default options, created on first call. Use it unless 
 | `scheduler`     | `SchedulerAdapter`         | auto    | Override the environment ladder — the seam for tests and exotic hosts.                                                                                                                                               |
 | `flushOnHidden` | `boolean`                  | `true`  | Drain the queue on `visibilitychange: hidden` / `pagehide`, because hidden pages may never get another idle period — or never come back.                                                                             |
 | `onError`       | `(error: unknown) => void` | —       | Error channel for tasks nobody awaited. See [Errors](#errors). Aborts are not reported.                                                                                                                              |
+| `agingMs`       | `number`                   | `1000`  | Starvation guard for `priority` (see [Priority](#priority)): a task waits at most this long before it outranks everything ahead of it. `Infinity` disables aging, i.e. strict priority.                              |
 
 ### Methods
 
@@ -194,10 +221,12 @@ The page-wide runner with default options, created on first call. Use it unless 
 
 Per-task options (`push` / `pushChunked`):
 
-| Option    | Type          | Description                                                                                               |
-| --------- | ------------- | --------------------------------------------------------------------------------------------------------- |
-| `timeout` | `number`      | ms after which the task is force-run even if the page never goes idle. Omit = may wait indefinitely.      |
-| `signal`  | `AbortSignal` | Abort this one task. Rejects with `AbortError`; a chunked task's `finally` blocks run via `gen.return()`. |
+| Option     | Type                                                | Description                                                                                               |
+| ---------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `timeout`  | `number`                                            | ms after which the task is force-run even if the page never goes idle. Omit = may wait indefinitely.      |
+| `signal`   | `AbortSignal`                                       | Abort this one task. Rejects with `AbortError`; a chunked task's `finally` blocks run via `gen.return()`. |
+| `priority` | `'user-blocking' \| 'user-visible' \| 'background'` | Which bucket to run from first. Default `'user-visible'`. See [Priority](#priority).                      |
+| `key`      | `PropertyKey`                                       | Supersede any pending task with the same key. See [Deduplicating by key](#deduplicating-by-key).          |
 
 Deadlines are measured on a monotonic clock (`performance.now()` where available), so a system clock change mid-flight cannot shift them.
 
