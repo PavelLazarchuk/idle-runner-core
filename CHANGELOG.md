@@ -1,5 +1,11 @@
 # @idle-runner/core
 
+## 1.2.1
+
+### Patch Changes
+
+- 53cd442: Add a `size-limit` budget and enforce it in CI. `npm run size` measures the built ESM and CJS bundles (minified + brotli) and fails if they exceed the limits in `.size-limit.json` — currently 3 kB for the full entry point, plus a tree-shaken `IdleRunner`-only entry so a regression in tree-shakeability shows up as a CI failure. Tooling only; the published bundle is unchanged.
+
 ## 1.2.0
 
 ### Minor Changes

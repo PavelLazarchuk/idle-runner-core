@@ -1,6 +1,6 @@
 {
     "name": "@idle-runner/core",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Idle runner that defers and time-slices non-urgent work off the main thread, like requestIdleCallback but Safari-safe. Zero dependencies.",
     "type": "module",
     "sideEffects": false,
