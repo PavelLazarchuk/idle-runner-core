@@ -23,6 +23,7 @@ jobs:
             - run: npm run test:browser
             - run: npm run build
             - run: npm run check-exports
+            - run: npm run size
             - name: Assert zero runtime dependencies (it is a marketing claim)
               run: |
                   node -e "
