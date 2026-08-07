@@ -17,6 +17,15 @@ export interface IdleTaskOptions {
     key?: PropertyKey;
 }
 
+export interface IdleChunkedTaskOptions<P = unknown> extends IdleTaskOptions {
+    /**
+     * Called with every value the generator yields, in the slice that produced it —
+     * a progress channel that costs nothing when unused. A throw is swallowed with a
+     * dev warning: reporting progress must not be able to fail the task.
+     */
+    onProgress?: (value: P) => void;
+}
+
 export interface IdleRunnerOptions {
     budgetMs?: number;
     scheduler?: SchedulerAdapter;

@@ -1,11 +1,13 @@
 import type {
     Deadline,
+    IdleChunkedTaskOptions,
     IdleRunnerOptions,
     IdleTaskOptions,
     SchedulerAdapter,
     TaskPriority,
 } from './types';
 import { createAbortError } from './abort-error';
+import { devWarn } from './dev';
 import { createSchedulerAdapter } from '../scheduler/adapter';
 import { bindHiddenFlush } from '../scheduler/lifecycle';
 import { hostNow } from '../scheduler/clock';
@@ -39,18 +41,7 @@ interface Task {
     _seq: number;
     _queuedAt: number;
     _key: PropertyKey | null;
-}
-
-declare const process: { env?: { NODE_ENV?: string } } | undefined;
-
-function isDev(): boolean {
-    return typeof process === 'undefined' || process?.env?.NODE_ENV !== 'production';
-}
-
-function devWarn(message: string): void {
-    if (isDev() && typeof console !== 'undefined') {
-        console.warn(`idle-runner: ${message}`);
-    }
+    _onProgress: ((value: unknown) => void) | null;
 }
 
 export class IdleRunner {
@@ -61,6 +52,7 @@ export class IdleRunner {
     private readonly _onError: ((error: unknown) => void) | null;
     private readonly _queues: Task[][] = [[], [], []];
     private readonly _keyed = new Map<PropertyKey, Task>();
+    private _idleWaiters: (() => void)[] = [];
     private _nextSeq = 1;
     private _current: Task | null = null;
     private _handle: number | null = null;
@@ -108,9 +100,9 @@ export class IdleRunner {
         return this._guard(this._enqueue<T>('fn', fn, null, options));
     }
 
-    pushChunked<T>(
-        generator: Generator<unknown, T, unknown>,
-        options?: IdleTaskOptions
+    pushChunked<T, P = unknown>(
+        generator: Generator<P, T, unknown>,
+        options?: IdleChunkedTaskOptions<P>
     ): Promise<T> {
         const candidate = generator as unknown as Record<PropertyKey, unknown> | null;
 
@@ -121,7 +113,14 @@ export class IdleRunner {
             return this._guard(Promise.reject(new TypeError('needs a sync generator')));
         }
 
-        return this._guard(this._enqueue<T>('gen', null, generator, options));
+        return this._guard(
+            this._enqueue<T>(
+                'gen',
+                null,
+                generator as unknown as Generator<unknown, T, unknown>,
+                options as IdleChunkedTaskOptions | undefined
+            )
+        );
     }
 
     clear(reason?: unknown): void {
@@ -145,6 +144,7 @@ export class IdleRunner {
         }
 
         this._keyed.clear();
+        this._maybeSignalIdle();
     }
 
     pause(): void {
@@ -169,6 +169,14 @@ export class IdleRunner {
         }
 
         this._flushNow();
+    }
+
+    whenIdle(): Promise<void> {
+        if (this.size === 0) return Promise.resolve();
+
+        return new Promise<void>(resolve => {
+            this._idleWaiters.push(resolve);
+        });
     }
 
     get size(): number {
@@ -203,7 +211,7 @@ export class IdleRunner {
         kind: 'fn' | 'gen',
         run: (() => T) | null,
         gen: Generator<unknown, T, unknown> | null,
-        options: IdleTaskOptions | undefined
+        options: IdleChunkedTaskOptions | undefined
     ): Promise<T> {
         const signal = options?.signal ?? null;
 
@@ -230,6 +238,8 @@ export class IdleRunner {
                 _seq: this._nextSeq++,
                 _queuedAt: queuedAt,
                 _key: key,
+                _onProgress:
+                    (options?.onProgress as ((value: unknown) => void) | undefined) ?? null,
             };
 
             if (key !== null) this._supersede(key, task);
@@ -410,6 +420,17 @@ export class IdleRunner {
         } else {
             this._arm();
         }
+
+        this._maybeSignalIdle();
+    }
+
+    private _maybeSignalIdle(): void {
+        if (this._idleWaiters.length === 0 || this.size !== 0) return;
+
+        const waiters = this._idleWaiters;
+        this._idleWaiters = [];
+
+        for (const resolve of waiters) resolve();
     }
 
     /**
@@ -519,6 +540,8 @@ export class IdleRunner {
             if (result.done) {
                 this._current = null;
                 this._settle(task, true, result.value);
+            } else {
+                this._emitProgress(task, result.value);
             }
         } catch (error) {
             this._current = null;
@@ -543,6 +566,8 @@ export class IdleRunner {
                     return;
                 }
                 if (task._settled) return;
+
+                this._emitProgress(task, result.value);
             }
         } catch (error) {
             this._settle(task, false, error);
@@ -560,6 +585,7 @@ export class IdleRunner {
         this._settle(task, false, createAbortError());
         this._disarm();
         this._arm();
+        this._maybeSignalIdle();
     }
 
     private _closeGenerator(task: Task): void {
@@ -597,7 +623,18 @@ export class IdleRunner {
         task._gen = null;
         task._signal = null;
         task._onAbort = null;
+        task._onProgress = null;
         deliver?.(value);
+    }
+
+    private _emitProgress(task: Task, value: unknown): void {
+        if (task._settled || !task._onProgress) return;
+
+        try {
+            task._onProgress(value);
+        } catch {
+            devWarn('onProgress threw');
+        }
     }
 
     private _maybeWarnSlowStep(started: number): void {

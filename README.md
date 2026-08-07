@@ -116,6 +116,55 @@ function onQuery(query: string) {
 
 Only _pending_ work is superseded — a task already running (including a suspended chunked generator mid-`yield`) keeps going; cancel that one yourself with `signal` if you need to. `key` and `priority` compose freely: the newest push keeps whichever priority it was given, independent of the one it replaced.
 
+## Lists and progress
+
+Walking a long list is the common case, so it comes ready-made — `idleMap` and `idleForEach` build the generator for you:
+
+```ts
+import { idleMap } from '@idle-runner/core';
+
+const thumbnails = await idleMap(photos, downscale, {
+    onProgress: done => setProgress(done / photos.length),
+});
+```
+
+They take any iterable (arrays, `Set`, a generator), pass `(item, index)`, and accept every per-task option — `signal`, `timeout`, `priority`, `key` — plus `runner` (defaults to `sharedRunner()`) and `chunkSize`. By default the thread is handed back after **every item**, which is the safe choice when you don't know what one item costs; raise `chunkSize` when the per-item work is small enough that the check between items is the expensive part:
+
+```ts
+await idleForEach(rows, row => index.add(row), { chunkSize: 500 });
+```
+
+Both are tree-shakeable: importing `IdleRunner` alone does not pull them in.
+
+`onProgress` also works on `pushChunked` directly, where it receives whatever your generator yields — turning `yield` into a progress channel at no cost when unused:
+
+```ts
+function* parse(lines: string[]) {
+    for (const [i, line] of lines.entries()) {
+        rows.push(parseLine(line));
+        yield i + 1; // → onProgress
+    }
+
+    return rows;
+}
+
+await runner.pushChunked(parse(lines), {
+    onProgress: done => setProgress(done / lines.length),
+});
+```
+
+A throwing `onProgress` is swallowed with a dev warning — reporting progress cannot fail the task it reports on.
+
+## Waiting for the queue
+
+`whenIdle()` resolves once nothing is left in the queue — useful in tests, before a prerender snapshot, or ahead of a teardown that must not race the queue:
+
+```ts
+await runner.whenIdle();
+```
+
+It never rejects: it says the runner has nothing left to do, not how the work went. Tasks that threw or aborted still count as done, and a **paused** runner with work queued keeps it pending.
+
 ## Errors
 
 `push` and `pushChunked` return real promises, and a task that throws rejects its promise. That means **a task you never awaited is an unhandled rejection** — including the `AbortError`s that `clear()` and `destroy()` deliver to everything still queued:
@@ -215,6 +264,7 @@ The page-wide runner with default options, created on first call. Use it unless 
 | `clear(reason?)`                | Reject every pending task (`AbortError` by default, or your `reason`) and empty the queue.                                                                                                                            |
 | `pause()` / `resume()`          | Stop/restart draining. A suspended generator resumes from the same `yield`. Note that `timeout` deadlines do not fire while paused.                                                                                   |
 | `flush()`                       | Run everything **now**, ignoring idleness. By construction this is a long task — it's the escape hatch, and what `flushOnHidden` calls.                                                                               |
+| `whenIdle()`                    | Resolves when the queue is empty. Never rejects. See [Waiting for the queue](#waiting-for-the-queue).                                                                                                                 |
 | `size`                          | Pending task count (including a suspended generator).                                                                                                                                                                 |
 | `isRunning`                     | `true` while the runner is executing a slice.                                                                                                                                                                         |
 | `destroy()`                     | Unbind lifecycle listeners (`visibilitychange`/`pagehide`/Safari `beforeunload`) and `clear()` pending tasks. Call this when a runner is no longer needed — otherwise it is pinned in memory for the page's lifetime. |
@@ -228,7 +278,25 @@ Per-task options (`push` / `pushChunked`):
 | `priority` | `'user-blocking' \| 'user-visible' \| 'background'` | Which bucket to run from first. Default `'user-visible'`. See [Priority](#priority).                      |
 | `key`      | `PropertyKey`                                       | Supersede any pending task with the same key. See [Deduplicating by key](#deduplicating-by-key).          |
 
+`pushChunked` takes one more:
+
+| Option       | Type                 | Description                                                                                                                                     |
+| ------------ | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onProgress` | `(value: P) => void` | Called with every value the generator yields, in the slice that produced it. Throws are warned and swallowed. Not called on the `return` value. |
+
 Deadlines are measured on a monotonic clock (`performance.now()` where available), so a system clock change mid-flight cannot shift them.
+
+### `idleMap(items, fn, options?)` / `idleForEach(items, fn, options?)`
+
+`items.map(fn)` / `items.forEach(fn)` spread across idle slices. Reject with the first throw from `fn`, or with `AbortError` on `signal` — the partial result is dropped either way. See [Lists and progress](#lists-and-progress).
+
+| Option       | Type                     | Default          | Description                                                                                     |
+| ------------ | ------------------------ | ---------------- | ----------------------------------------------------------------------------------------------- |
+| `runner`     | `IdleRunner`             | `sharedRunner()` | Which queue to run on.                                                                          |
+| `chunkSize`  | `number`                 | `1`              | Items processed between yields. Clamped to >= 1.                                                |
+| `onProgress` | `(done: number) => void` | —                | Items processed so far; the trailing partial chunk reports too, so it always ends on the total. |
+
+Plus `signal`, `timeout`, `priority` and `key`, which behave exactly as on `pushChunked`.
 
 ### `createSchedulerAdapter(options?)`
 
