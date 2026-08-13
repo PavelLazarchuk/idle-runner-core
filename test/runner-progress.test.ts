@@ -160,6 +160,33 @@ describe('whenIdle', () => {
         await expect(idle).resolves.toBeUndefined();
     });
 
+    it('hands every caller the same promise while the runner stays busy', async () => {
+        const { fake, runner } = makeRunner();
+        void runner.push(() => 'a');
+        const first = runner.whenIdle();
+        expect(runner.whenIdle()).toBe(first);
+        fake.fireSlice(100);
+        await first;
+        expect(runner.whenIdle()).not.toBe(first);
+    });
+
+    it('starts a fresh promise for the next busy stretch', async () => {
+        const { fake, runner } = makeRunner();
+        void runner.push(() => 'a');
+        const first = runner.whenIdle();
+        fake.fireSlice(100);
+        await first;
+        void runner.push(() => 'b');
+        const second = runner.whenIdle();
+        let settled = false;
+        void second.then(() => (settled = true));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        fake.fireSlice(100);
+        await second;
+        expect(settled).toBe(true);
+    });
+
     it('a paused runner with work queued keeps it pending', async () => {
         const { runner } = makeRunner();
         runner.push(() => 'later').catch(() => {});

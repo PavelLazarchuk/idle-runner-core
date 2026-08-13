@@ -52,6 +52,62 @@ describe('budgetMs validation', () => {
     });
 });
 
+describe('timeout validation', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+        warnSpy.mockRestore();
+    });
+
+    it.each([
+        ['NaN', NaN],
+        ['Infinity', Infinity],
+        ['a non-number from JS callers', 'oops'],
+    ])(
+        'ignores a %s timeout instead of arming a deadline that never comes due',
+        async (_label, value) => {
+            const fake = new FakeScheduler();
+            const runner = new IdleRunner({ scheduler: fake, flushOnHidden: false });
+            const promise = runner.push(() => 'ran', { timeout: value as number });
+            expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('timeout'));
+            expect(fake.lastRequestTimeout).toBeUndefined();
+            fake.fireSlice(100);
+            await expect(promise).resolves.toBe('ran');
+        }
+    );
+
+    it('does not leave a forced slice with nothing to drain, which would spin', () => {
+        const fake = new FakeScheduler();
+        const runner = new IdleRunner({ scheduler: fake, flushOnHidden: false });
+        const ran: string[] = [];
+        void runner.push(() => ran.push('a'), { timeout: NaN });
+        fake.fireTimeout();
+        expect(ran).toEqual([]);
+        fake.fireSlice(100);
+        expect(ran).toEqual(['a']);
+    });
+
+    it('does not cancel and re-arm the request on every push', () => {
+        const fake = new FakeScheduler();
+        const runner = new IdleRunner({ scheduler: fake, flushOnHidden: false });
+        void runner.push(() => 'a', { timeout: NaN });
+        void runner.push(() => 'b', { timeout: NaN });
+        expect(fake.log.filter(entry => entry.op === 'cancel')).toHaveLength(0);
+    });
+
+    it('keeps a finite timeout, which is what the deadline is for', () => {
+        const fake = new FakeScheduler();
+        const runner = new IdleRunner({ scheduler: fake, flushOnHidden: false });
+        void runner.push(() => 'a', { timeout: 50 });
+        expect(warnSpy).not.toHaveBeenCalled();
+        expect(fake.lastRequestTimeout).toBeGreaterThan(0);
+        expect(fake.lastRequestTimeout).toBeLessThanOrEqual(50);
+    });
+});
+
 describe('onError', () => {
     function makeRunner(onError: (error: unknown) => void) {
         const fake = new FakeScheduler();

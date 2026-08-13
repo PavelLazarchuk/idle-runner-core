@@ -25,6 +25,16 @@ const PRIORITY_RANKS: Record<string, number | undefined> = {
 const RANK_COUNT = 3;
 const DEFAULT_RANK = 1;
 
+function deadlineFrom(queuedAt: number, timeout: number | undefined): number | null {
+    if (timeout == null) return null;
+
+    if (Number.isFinite(timeout)) return queuedAt + timeout;
+
+    devWarn('timeout must be a finite number; ignored');
+
+    return null;
+}
+
 // Internal members are _-prefixed so the build can mangle them (tsup
 // esbuildOptions mangleProps) — they are the bulk of the shipped bytes.
 interface Task {
@@ -52,7 +62,8 @@ export class IdleRunner {
     private readonly _onError: ((error: unknown) => void) | null;
     private readonly _queues: Task[][] = [[], [], []];
     private readonly _keyed = new Map<PropertyKey, Task>();
-    private _idleWaiters: (() => void)[] = [];
+    private _idlePromise: Promise<void> | null = null;
+    private _resolveIdle: (() => void) | null = null;
     private _nextSeq = 1;
     private _current: Task | null = null;
     private _handle: number | null = null;
@@ -174,9 +185,9 @@ export class IdleRunner {
     whenIdle(): Promise<void> {
         if (this.size === 0) return Promise.resolve();
 
-        return new Promise<void>(resolve => {
-            this._idleWaiters.push(resolve);
-        });
+        return (this._idlePromise ??= new Promise<void>(resolve => {
+            this._resolveIdle = resolve;
+        }));
     }
 
     get size(): number {
@@ -221,16 +232,17 @@ export class IdleRunner {
 
         const rank = this._rankOf(options?.priority);
         const key = options?.key ?? null;
+        const queuedAt = hostNow();
+        const deadlineAt = deadlineFrom(queuedAt, options?.timeout);
 
         return new Promise<T>((resolve, reject) => {
-            const queuedAt = hostNow();
             const task: Task = {
                 _kind: kind,
                 _run: run,
                 _gen: gen,
                 _resolve: resolve as (value: unknown) => void,
                 _reject: reject,
-                _deadlineAt: options?.timeout != null ? queuedAt + options.timeout : null,
+                _deadlineAt: deadlineAt,
                 _signal: signal,
                 _onAbort: null,
                 _settled: false,
@@ -425,12 +437,13 @@ export class IdleRunner {
     }
 
     private _maybeSignalIdle(): void {
-        if (this._idleWaiters.length === 0 || this.size !== 0) return;
+        if (!this._resolveIdle || this.size !== 0) return;
 
-        const waiters = this._idleWaiters;
-        this._idleWaiters = [];
+        const resolve = this._resolveIdle;
+        this._resolveIdle = null;
+        this._idlePromise = null;
 
-        for (const resolve of waiters) resolve();
+        resolve();
     }
 
     /**
