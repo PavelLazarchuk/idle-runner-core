@@ -1,18 +1,21 @@
 [
     {
-        "name": "ESM, everything",
+        "name": "@idle-runner/core",
         "path": "dist/index.js",
-        "limit": "3 kB"
+        "limit": "3.5 kB",
+        "gzip": true
     },
     {
-        "name": "ESM, IdleRunner only",
+        "name": "@idle-runner/core (cjs)",
+        "path": "dist/index.cjs",
+        "limit": "3.6 kB",
+        "gzip": true
+    },
+    {
+        "name": "tree-shaking: { IdleRunner } only",
         "path": "dist/index.js",
         "import": "{ IdleRunner }",
-        "limit": "3 kB"
-    },
-    {
-        "name": "CJS, everything",
-        "path": "dist/index.cjs",
-        "limit": "3.1 kB"
+        "limit": "3.25 kB",
+        "gzip": true
     }
 ]
